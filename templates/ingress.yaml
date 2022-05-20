@@ -1,0 +1,35 @@
+{{- if and .Values.networking.ingress.create .Values.networking.ports -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ template "app.fullname" . }}
+  labels: {{ include "app.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/ingress.class: {{ .Values.networking.ingress.class }}
+    cert-manager.io/cluster-issuer: {{ .Values.networking.ingress.clusterIssuer }}
+    {{- if .Values.networking.ingress.annotations }}
+    {{- toYaml .Values.networking.ingress.annotations | nindent 4 }}
+    {{- end}}
+spec:
+  rules:
+  {{- $service_name := include "app.fullname" . }}
+  {{- range .Values.networking.ports }}
+  - host: {{ .host | quote }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: {{ $service_name }}
+            port:
+              number: {{ .port }}
+        path: /
+        pathType: ImplementationSpecific
+  {{- end }}
+  tls:
+  - secretName: {{ $service_name }}
+    hosts:
+    {{- range .Values.networking.ports }}
+    - {{ .host | quote }}
+    {{- end }}
+{{- end }}

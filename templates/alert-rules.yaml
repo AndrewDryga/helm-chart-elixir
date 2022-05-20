@@ -1,0 +1,14 @@
+{{- if and .Values.monitoring.alerts.enabled .Values.monitoring.alerts.rules }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  namespace: {{ default .Release.Namespace .Values.monitoring.alerts.namespace }}
+  name: {{ template "app.fullname" . }}
+  labels: {{ include "app.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.monitoring.alerts.rules }}
+  groups:
+  - name: {{ template "app.fullname" $ }}
+    rules: {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,25 @@
+{{- if or .Values.networking.ports .Values.monitoring.serviceMonitor.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ template "app.fullname" . }}
+  labels: {{ include "app.labels" . | nindent 4 }}
+spec:
+  ports:
+  {{- range .Values.networking.ports }}
+  - name: {{ .name }}
+    protocol: {{ .protocol }}
+    port: {{ .port }}
+    targetPort: {{ .name }}
+  {{- end }}
+  {{- if .Values.monitoring.serviceMonitor.enabled }}
+  - name: exporter
+    protocol: TCP
+    port: {{ .Values.monitoring.serviceMonitor.exporter.port }}
+    targetPort: exporter
+  {{- end }}
+  selector:
+    app.kubernetes.io/name: {{ template "app.fullname" . }}
+  type: "ClusterIP"
+{{- end }}

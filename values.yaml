@@ -1,0 +1,318 @@
+## Container image
+# image: talkinto_tag
+
+## DockerHub Org which is used to pull images from
+imageOrg: talkinto-production
+
+## Container image tag which is used to pull the container and as version label on created pods
+# imageTag: "0.0.0"
+
+imageRegistry: gcr.io/
+
+## Specify a imagePullPolicy
+## 'Always' if imageTag is 'latest', else set to 'IfNotPresent' (default).
+##
+## For staging environment it's recommended to set it to 'Always', so that rebuild images
+## would be pulled at all times.
+##
+## ref: http://kubernetes.io/docs/user-guide/images/#pre-pulling-images
+imagePullPolicy: IfNotPresent
+
+## Secret which is used to pull container images.
+## If not set an ImageOrg would be used as a secret name: `{{ .Values.imageOrg }}-pull-secret`
+imagePullSecret: registry-pull-secret
+
+## Controls where pods are scheduled
+scheduling:
+  nodes:
+    ## Nodes affinity (selecting nodes where pods would be hosted)
+    affinity:
+      ## Node label which is used to set node affinity
+      nodeLabelKey: optimized-for
+
+      ## Soft node affinity - pods are scheduled to other nodes when no node is available.
+      softPreference: {}
+        # web-requests: 100
+
+      ## Hard node affinity - pods are scheduled only to matching nodes.
+      hardPreference: []
+      # - web-requests
+      # - background-jobs
+    ## Nodes anti-affinity (selecting nodes where pods would NOT be hosted)
+    antiAffinity:
+      ## Node label which is used to set node anti-affinity
+      nodeLabelKey: optimized-for
+
+      ## Hard node anti-affinity - pods are never scheduled to matching nodes.
+      hardPreference: []
+
+  ## Pods affinity and anty-affinity
+  pods:
+    ## Prefer to be scheduled on the same hosts where other cluster members are deployed
+    clusterServicesAffinity: true
+
+    ## Enables HA mode by settings a container anti-affinity which guarantees that two
+    ## pods of the same application would not be deployed to the same node.
+    selfAntiAffinity:
+      enabled: false
+
+      ## "hard" anti-affinity would mean that pod would not be scheduled if all other scheduleable nodes
+      ## already have an instance of this pod, "soft" - k8s would try not to schedule duplicate pods on
+      ### the same node, but this is best-effort only.
+      ##
+      ## Notice that this means certain requirements would be applied to cluster with a "hard" anti-affinity:
+      ## - number of available and selected for scheduling nodes should be less than replicasCount,
+      ## otherwise some pods would be unschedulable as there won't be a node where service is not deployed already;
+      ## - if number of available and selected for scheduling nodes is the same as replicasCount,
+      ## deploymentStrategy.maxUnavailable should be set to be bigger than 0. Otherwise during deployed newly
+      ## created pods won't be scheduled as there won't be a node where service is not deployed already;
+      ## - if number of available and selected for scheduling nodes is the same as replicasCount,
+      ## maxSurge should be set to 0. So that in situations where we low on available nodes we will only
+      ## create new pods when one of existing ones if deleted.
+      ##
+      ## TLDR:
+      ## - ensure that number of nodes is sufficient to deploy all replicas (from scale.horizontal incl. autoscaling);
+      ## - if number of nodes is equal to scale.horizontal.replicaCount then make sure to set
+      ## deploymentStrategy.maxSurge to 0.
+      type: "hard"
+
+scale:
+  vertical:
+    ## Configure resource requests and limits.
+    ##
+    ## When all pods in a container have limits set or limits set to the same value as request -
+    ## pod would receive Guaranteed QOS class. When only requests are set or request and non-zero limits
+    ## are set but do not match each other - QOS class is Burstable. Other pods are getting Best Effort QOS class.
+    ##
+    ## QOS class tells Kubernetes which pods should be killed first when system is low on resources.
+    ##
+    ## ref: http://kubernetes.io/docs/user-guide/compute-resources/
+    ## ref: https://github.com/kubernetes/community/blob/master/contributors/design-proposals/node/resource-qos.md
+    resources: {}
+      # requests:
+      #   ## This sets mimum CPU a container would get. It may get more resources if they are
+      #   ## available, but due to container isolation it's not guaranteed.
+      #   ##
+      #   ## Excess CPU resources will be distributed based on the amount of CPU requested.
+      #   cpu: 250m
+      #   ## This sets amount of RAM reserved for a pod.
+      #   memory: 400Mi
+      # limits:
+      #   ## Pods will be throttled if they exceed their limit.
+      #   ## If limit is unspecified, then the pods can use excess CPU when available.
+      #   cpu: 250m
+      #   ## This sets maximum amount of RAM a pod can use, after pod reaches it's limit it can be OOM killed
+      #   ## when other pods or system tasks would need more memory. QOS class would tell which pods would be killed
+      #   ## first on an memory-overcommited host.
+      #   memory: 400Mi
+
+    autoscaler:
+      ## Enabled or disables vertical pod autoscaler (VPA).
+      ##
+      ## This is NOT a recommended way to scale Elixir applications as Erlang VM scales pretty well by itself,
+      ## but can be used to deploy to more nodes when load is peaking.
+      ##
+      ## Use it carefully with `scheduling.nodes.affinity.hardPreference` and
+      ## "hard" `scheduling.pods.selfAntiAffinity` as there may be no nodes available to scale the replica set.
+      enabled: false
+
+      ## Enables VPA recomender, which would let us to get recommended resource requests and limits over time.
+      ## Can be changed to "Auto" and VPA would automatically adjust resource requests and limits,
+      ## but this would affect QOS setting that depend on those values.
+      updateMode: "Off"
+
+  horizontal:
+    ## Replicas set count
+    replicasCount: 2
+
+    ## Manages horizonal pod autoscaling (HPA)
+    autoscaler:
+      enabled: false
+      maxReplicas: 10
+      target:
+        targetCPUUtilizationPercentage: 80
+
+availability:
+  # Deployment strategy
+  deploymentStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      ## Number of pods created over replica count limit during deployment.
+      maxSurge: 0
+
+      ## Numbef of pods deleted on each step during deployment.
+      ## Should be less than replicasCount to prevent downtimes.
+      maxUnavailable: 1
+
+  ## Pod Disruption Budget. Configures how many replicas should be available during voluntary disruption,
+  ## eg. during upgrading nodes in cluster.
+  ##
+  ## ref: https://kubernetes.io/docs/concepts/workloads/pods/disruptions/
+  podDisruptionBudget:
+    ## Mimum count of pods that must be available during a voluntary disruption.
+    ## Required when maxUnavailable is not set.
+    minAvailable: 1
+
+    ## Maximum count of pods that can be unavailable during a voluntary disruption.
+    ## Required when minAvailable is not set.
+    # maxUnavailable: 1
+
+monitoring:
+  ## Log level which is set in LOG_LEVEL environment variable for all containers deployed by this chart.
+  log_level: "info"
+
+  ## Enables metric exporting and configures serviceMonitor resource for Prometheus Operator.
+  ## Application must support metric exporting in order to use this.
+  ##
+  ## Notice: service monitor would be disabled for init containers.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    exporter:
+      port: 9090
+    # namespace: "talkinto" # defaults to namespace in which helm chart is installed
+    selector: {} # selector for the Prometheus operator instance
+
+  ## This probe is used to determine that container is healthy.
+  ##
+  ## Internally, applications can use readiness status to decide if container is ready to be joined to
+  ## Erlang cluster.
+  readinessProbe: {}
+    # initialDelaySeconds: 40
+    # periodSeconds: 15
+    # timeoutSeconds: 5
+    # failureThreshold: 6
+    # tcpSocket:
+    #   port: 4000
+
+  ## This probe is used once a while to check that container is healthy.
+  ## Unheatly containers would be restarted by k8s.
+  livenessProbe: {}
+    # initialDelaySeconds: 30
+    # periodSeconds: 30
+    # timeoutSeconds: 5
+    # failureThreshold: 2
+    # tcpSocket:
+    #   port: 4000
+
+  alerts:
+    ## Enables alertmanager rules
+    enabled: false
+
+    ## Allows to override namespace in which rules are created. By default - release namesspace.
+    # namespace: "kube-monitoring"
+
+    rules: []
+    # - alert: TooMany500s
+    #   expr: 100 * (sum(nginx_ingress_controller_requests{status=~"5.+",ingress="imaginator"}) / sum(nginx_ingress_controller_requests{ingress="imaginator"})) > 0.75
+    #   for: 1m
+    #   labels:
+    #     severity: critical
+    #   annotations:
+    #     description: Too many 5XXs
+    #     summary: More than 0.75% of the all requests did return 5XX, this require your attention
+    # - alert: TooMany400s
+    #   expr: 100 * (sum(nginx_ingress_controller_requests{status!="404",status=~"4.+",ingress="imaginator"}) / sum(nginx_ingress_controller_requests{ingress="imaginator"})) > 2
+    #   for: 1m
+    #   labels:
+    #     severity: warning
+    #   annotations:
+    #     description: Too many 4XXs
+    #     summary: More than 2% of the all requests did return 4XX (except 404), this require your attention
+
+
+networking:
+  ## This list allows to expose additional ports on the container and
+  ## map those ports to hosts by adding a path to ingress.
+  ##
+  ## Exposed ports and hosts would be available for all containers under a specified environment variables.
+  ports: []
+  # - name: http
+  #   host: api.talkinto.com
+  #   hostEnvVarName: TALKINTO_API_HOST
+  #   port: 4000
+  #   portEnvVarName: TALKINTO_API_PORT
+  #   protocol: TCP
+
+  ingress:
+    ## Expose ports listed above on their hosts by using ingress controller.
+    create: true
+
+    ## Value for `kubernetes.io/ingress.class` ingress annotation, specifies which ingress controller should be used.
+    class: nginx
+
+    ## Value for cert-managers `cert-manager.io/cluster-issuer` ingress annotation.
+    clusterIssuer: letsencrypt
+
+    ## Additional annotations for application ingress
+    annotations: {}
+
+# General application configuration
+erlang:
+  ## Node name which can be used when Erlang VM release boots
+  ## Default: value from .image where `_` replaced with `-`
+  # nodeName: talkinto-tag
+
+  distribution:
+    ## Name of the Erlang cluster.
+    ##
+    ## This would set a POD_SELECTOR environment variable (k8s label selector)
+    ## which would tell clustering code how to select other nodes in the same Erlang cluster.
+    # cluster_name: "talkinto"
+
+    ## This secret is used to store Erlang distribution cookie which is used for Erlang
+    ## cluster nodes authentication. Secret must contain a `cookie` key.
+    ##
+    ## Secret should have a `cookie` field with an Erlang distribution cookie.
+    secret: "erlang-cluster-distribution"
+
+    ## This port value would be set in both LISTEN_DIST_MIN and LISTEN_DIST_MAX environment variables.
+    ## It's important to have a static port for them because Kubernetes does not allow to expose port ranges.
+    port: 10000
+
+## List of additional volumes all containers (including initContainer) should mount.
+volumes: []
+# - name: "google-cloud-storage"
+#   mountPath: /secrets/cloudstorage
+#   mountSource:
+#     secret:
+#       secretName: "cloud-storage"
+
+## Adds annotations to pods
+podAnnotations: {}
+  ## This annotation allows Kubernetes to evict pods during node upgrade.
+  ##
+  ## This is important when you have a local storage (emptyDir or even an tmpFS)
+  ## connected to a pod. K8s won't be able to evict that pods because of their
+  ## local data, unless this annotation is set.
+  # cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+
+initContainer:
+  enabled: false
+
+  ## Runs ecto.migrate command in the initContainer.
+  ##
+  ## Notice: this value should be interpolated as string.
+  runArgs: |
+    ['eval', 'TalkInto.Core.ReleaseTasks.ecto_migrate(:application_name)']
+
+  ## List of additional environment variables which would be applied to initContainer.
+  ##
+  ## Values here would override environment variables specified for all containers.
+  environment: {}
+    # TALKINTO_DOMAIN_EVENTBUS_ENABLED_CONSUMERS: ""
+
+## Environment variables that would be added to all containers in pods defined by this chart.
+##
+## By default, production variables must be used and then they can be overriden in values.${other_env}.yaml file.
+## They can also be overriden for initContainer.
+##
+## This block uses the same syntax as Pods spec.container.*.env.
+##
+##
+environment: {}
+  # TALKINTO_WEB_DB:
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: "foo"
+  #       key: bar

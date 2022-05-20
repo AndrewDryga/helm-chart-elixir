@@ -1,0 +1,282 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ template "app.fullname" . }}
+  labels: {{ include "app.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.scale.horizontal.replicasCount }}
+  strategy: {{ toYaml .Values.availability.deploymentStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ template "app.fullname" . }}
+  template:
+    metadata:
+      labels: {{ include "app.labels" . | nindent 8 }}
+        app.kubernetes.io/version: {{ .Values.imageTag | quote }}
+        app.kubernetes.io/part-of: {{ .Values.erlang.distribution.cluster_name | quote }}
+        cluster_name: {{ .Values.erlang.distribution.cluster_name | quote }}
+      {{- if .Values.podAnnotations }}
+      annotations: {{- toYaml .Values.podAnnotations | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ template "app.fullname" . }}
+      affinity:
+        nodeAffinity:
+          {{- $affinity_node_label_key := .Values.scheduling.nodes.affinity.nodeLabelKey }}
+          {{- $anti_affinity_node_label_key := .Values.scheduling.nodes.antiAffinity.nodeLabelKey }}
+          {{- if .Values.scheduling.nodes.affinity.softPreference }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+          {{- range $label, $weight := .Values.scheduling.nodes.affinity.softPreference }}
+          - weight: {{ $weight }}
+            preference:
+              matchExpressions:
+              - key: {{ $affinity_node_label_key }}
+                operator: In
+                values:
+                - {{ $label }}
+          {{- end }}
+          {{- end }}
+          {{- if or .Values.scheduling.nodes.affinity.hardPreference .Values.scheduling.nodes.antiAffinity.hardPreference }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            {{- range .Values.scheduling.nodes.affinity.hardPreference }}
+            - matchExpressions:
+              - key: {{ $affinity_node_label_key }}
+                operator: In
+                values:
+                - {{ . | quote }}
+            {{- end }}
+            {{- range .Values.scheduling.nodes.antiAffinity.hardPreference }}
+            - matchExpressions:
+              - key: {{ $anti_affinity_node_label_key }}
+                operator: NotIn
+                values:
+                - {{ . | quote }}
+            {{- end }}
+          {{- end }}
+        {{- if .Values.scheduling.pods.clusterServicesAffinity }}
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: cluster_name
+                  operator: In
+                  values:
+                  - {{ .Values.erlang.distribution.cluster_name }}
+              topologyKey: "kubernetes.io/hostname"
+        {{- end }}
+        {{- if .Values.scheduling.pods.selfAntiAffinity.enabled }}
+        podAntiAffinity:
+          {{- if eq .Values.scheduling.pods.selfAntiAffinity.type "hard" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: "kubernetes.io/hostname"
+            labelSelector:
+              matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                - {{ template "app.fullname" . }}
+              - key: app.kubernetes.io/version
+                operator: In
+                values:
+                - {{ .Values.imageTag | quote }}
+              - key: helm.sh/release_revision
+                operator: In
+                values:
+                - "{{ .Release.Revision }}"
+          {{- else if eq .Values.scheduling.pods.selfAntiAffinity.type "soft" }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 10
+            podAffinityTerm:
+              topologyKey: "kubernetes.io/hostname"
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - {{ template "app.fullname" . }}
+                - key: app.kubernetes.io/version
+                  operator: In
+                  values:
+                  - {{ .Values.imageTag | quote }}
+                - key: helm.sh/release_revision
+                  operator: In
+                  values:
+                  - "{{ .Release.Revision }}"
+          {{- end }}
+        {{- end }}
+      {{- if .Values.initContainer.enabled }}
+      initContainers:
+      - name: {{ template "app.fullname" . }}-init-container
+        image: "{{ .Values.imageRegistry }}{{ .Values.imageOrg }}/{{ .Values.image }}:{{ .Values.imageTag }}"
+        command: ['bin/{{ .Values.image }}']
+        args: {{ .Values.initContainer.runArgs }}
+        imagePullPolicy: {{ default "IfNotPresent" .Values.imagePullPolicy | quote }}
+        env:
+        - name: LOG_LEVEL
+          value: {{ .Values.monitoring.log_level | quote }}
+        # Metrics exporting
+        - name: METRICS_EXPORTER_ENABLED
+          value: "false"
+        # Erlang distribution
+        - name: ERLANG_COOKIE
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.erlang.distribution.secret | quote }}
+              key: cookie
+        - name: LISTEN_DIST_MIN
+          value: {{ .Values.erlang.distribution.port | quote }}
+        - name: LISTEN_DIST_MAX
+          value: {{ .Values.erlang.distribution.port | quote }}
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_SELECTOR
+          value: "cluster_name={{ .Values.erlang.distribution.cluster_name }}"
+        - name: CLUSTER_STRATEGY
+          value: "TalkInto.Domain.Cluster.KubernetesStrategy"
+        # Ports environment variables
+        {{- range .Values.networking.ports }}
+        - name: {{ .hostEnvVarName }}
+          value: {{ .host | quote }}
+        - name: {{ .portEnvVarName }}
+          value: {{ .port | quote }}
+        {{- end }}
+        # Environment
+        {{- $env := (dict) }}
+        {{- if .Values.environment }}
+        {{- $env = mergeOverwrite $env .Values.environment }}
+        {{- end }}
+        ## Init container environment overrides
+        {{- if .Values.environment }}
+        {{- $env = mergeOverwrite $env .Values.initContainer.environment }}
+        {{- end }}
+        ## Render
+        {{- range $key, $value := $env }}
+        - name: {{ $key }}
+          {{- if or (kindIs "string" $value) (kindIs "int" $value) (kindIs "bool" $value) }}
+          value: {{ $value | quote }}
+          {{- else }}
+          {{- toYaml $value | nindent 10 }}
+          {{- end }}
+        {{- end }}
+        volumeMounts:
+        {{- range .Values.volumes }}
+        - name: {{ .name | quote }}
+          mountPath: {{ .mountPath | quote }}
+        {{- end }}
+      {{- end }}
+      containers:
+      - name: {{ template "app.fullname" . }}
+        image: "{{ .Values.imageRegistry }}{{ .Values.imageOrg }}/{{ .Values.image }}:{{ .Values.imageTag }}"
+        imagePullPolicy: {{ default "IfNotPresent" .Values.imagePullPolicy | quote }}
+        resources: {{ toYaml .Values.scale.vertical.resources | nindent 10 }}
+        {{- if .Values.monitoring.readinessProbe }}
+        readinessProbe: {{ toYaml .Values.monitoring.readinessProbe | nindent 10 }}
+        {{- end}}
+        {{- if .Values.monitoring.livenessProbe }}
+        livenessProbe: {{ toYaml .Values.monitoring.livenessProbe | nindent 10 }}
+        {{- end}}
+        env:
+        - name: APP_REVISION
+          value: "{{ .Values.image }}:{{ .Values.imageTag }}"
+        # Log Level
+        - name: LOG_LEVEL
+          value: {{ .Values.monitoring.log_level | quote }}
+        {{- if and .Values.monitoring.serviceMonitor .Values.monitoring.serviceMonitor.enabled }}
+        # Metrics exporting
+        - name: METRICS_EXPORTER_ENABLED
+          value: "true"
+        - name: METRICS_EXPORTER_PORT
+          value: {{ .Values.monitoring.serviceMonitor.exporter.port | quote }}
+        {{- else }}
+        - name: METRICS_EXPORTER_ENABLED
+          value: "false"
+        {{- end }}
+        # Erlang distribution
+        - name: ERLANG_COOKIE
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.erlang.distribution.secret | quote }}
+              key: cookie
+        - name: LISTEN_DIST_MIN
+          value: {{ .Values.erlang.distribution.port | quote }}
+        - name: LISTEN_DIST_MAX
+          value: {{ .Values.erlang.distribution.port | quote }}
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_SELECTOR
+          value: "cluster_name={{ .Values.erlang.distribution.cluster_name }}"
+        - name: CLUSTER_STRATEGY
+          value: "TalkInto.Domain.Cluster.KubernetesStrategy"
+        # Ports environment variables
+        {{- range .Values.networking.ports }}
+        - name: {{ .hostEnvVarName }}
+          value: {{ .host | quote }}
+        - name: {{ .portEnvVarName }}
+          value: {{ .port | quote }}
+        {{- end }}
+        # Environment
+        {{- $env := (dict) }}
+        {{- if .Values.environment }}
+        {{- $env = mergeOverwrite $env .Values.environment }}
+        {{- end }}
+        {{- range $key, $value := $env }}
+        - name: {{ $key }}
+          {{- if or (kindIs "string" $value) (kindIs "int" $value) (kindIs "bool" $value) }}
+          value: {{ $value | quote }}
+          {{- else }}
+          {{- toYaml $value | nindent 10 }}
+          {{- end }}
+        {{- end }}
+        ports:
+        {{- range .Values.networking.ports }}
+        - name: {{ .name }}
+          containerPort: {{ .port }}
+        {{- end }}
+        - name: epmd
+          containerPort: 4369
+        - name: disterl-mesh
+          containerPort: {{ .Values.erlang.distribution.port }}
+        {{- if and .Values.monitoring.serviceMonitor .Values.monitoring.serviceMonitor.enabled }}
+        - name: exporter
+          containerPort: {{ .Values.monitoring.serviceMonitor.exporter.port }}
+        {{- end }}
+        volumeMounts:
+        {{- range .Values.volumes }}
+        - name: {{ .name | quote }}
+          mountPath: {{ .mountPath | quote }}
+        {{- end }}
+      volumes:
+      {{- range .Values.volumes }}
+      - name: {{ .name | quote }}
+        {{- toYaml .mountSource | nindent 8 }}
+      {{- end }}
+      imagePullSecrets:
+      {{- if .Values.imagePullSecret }}
+      - name: {{ .Values.imagePullSecret | quote }}
+      {{- else }}
+      - name: "{{ .Values.imageOrg }}-pull-secret"
+      {{- end }}

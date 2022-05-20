@@ -1,0 +1,14 @@
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ template "app.fullname" . }}-discover-pods
+  labels: {{ include "app.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: {{ template "app.fullname" . }}
+  apiGroup: ""
+roleRef:
+  kind: Role
+  name: {{ template "app.fullname" . }}-pods-discovery
+  apiGroup: rbac.authorization.k8s.io

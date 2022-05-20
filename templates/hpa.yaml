@@ -1,0 +1,16 @@
+{{- if .Values.scale.horizontal.autoscaler.enabled -}}
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ template "app.fullname" . }}
+  labels: {{ include "app.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ template "app.fullname" . }}
+  minReplicas: {{ .Values.scale.horizontal.replicasCount }}
+  maxReplicas: {{ .Values.scale.horizontal.autoscaler.maxReplicas }}
+  {{ toYaml .Values.scale.horizontal.autoscaler.target }}
+{{- end -}}

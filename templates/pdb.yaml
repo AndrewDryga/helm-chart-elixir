@@ -1,0 +1,13 @@
+{{- if and .Values.availability.podDisruptionBudget (gt .Values.scale.horizontal.replicasCount 1.0) -}}
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ template "app.fullname" . }}
+  labels: {{ include "app.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ template "app.fullname" . }}
+{{ toYaml .Values.availability.podDisruptionBudget | indent 2 }}
+{{- end -}}

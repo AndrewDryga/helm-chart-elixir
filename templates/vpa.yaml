@@ -1,0 +1,15 @@
+{{- if .Values.scale.vertical.autoscaler.enabled -}}
+apiVersion: autoscaling.k8s.io/v1beta2
+kind: VerticalPodAutoscaler
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ template "app.fullname" . }}
+  labels: {{ include "app.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    apiVersion: "extensions/v1beta1"
+    kind: Deployment
+    name: {{ template "app.fullname" . }}
+  updatePolicy:
+    updateMode: {{ .Values.scale.vertical.autoscaler.updateMode | quote }}
+{{- end }}
